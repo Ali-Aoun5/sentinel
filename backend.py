@@ -123,12 +123,12 @@ def fetch_articles_from_dataset(dataset_id: str) -> list:
         title = item.get("title", "")
         summary = item.get("summary", "") or item.get("description", "")
         link = item.get("link", "")
-        published = item.get("published", "") or item.get("scraped_at", datetime.now().isoformat())
+        published = item.get("scraped_at", datetime.now().isoformat())
 
         title = clean_html(str(title))
         summary = clean_html(str(summary))
 
-        if title and len(title) > 10:
+       if title and len(title) > 10 and is_english(title):
             articles.append({
                 "title": title,
                 "summary": summary,
@@ -165,10 +165,17 @@ def get_trust_label(score: int) -> str:
 def clean_html(text: str) -> str:
     if not text:
         return ""
-    clean = re.sub(r'<[^>]+>', '', text)
+    import html
+    clean = html.unescape(text)  # fixes &#8217; and all HTML entities
+    clean = re.sub(r'<[^>]+>', '', clean)
     clean = re.sub(r'&[a-zA-Z]+;', ' ', clean)
     clean = ' '.join(clean.split())
     return clean[:800]
+def is_english(text: str) -> bool:
+    if not text:
+        return False
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return (ascii_chars / len(text)) > 0.8
 
 def generate_article_id(url: str, index: int = 0) -> int:
     return int(hashlib.md5(f"{url}{index}".encode()).hexdigest()[:8], 16)
