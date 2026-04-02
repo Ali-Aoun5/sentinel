@@ -424,7 +424,7 @@ def analyze_with_ai(articles: list, topic: str) -> dict:
     # Compute real risk score from data FIRST — this is always accurate
     data_risk_score, data_risk_level, risk_reason = compute_risk_score_from_articles(articles)
 
-    # Build article summaries for AI
+    # Build clean article list for AI
     articles_text = ""
     for i, a in enumerate(articles[:12]):
         source_domain = "unknown"
@@ -432,58 +432,61 @@ def analyze_with_ai(articles: list, topic: str) -> dict:
             if domain in a.get("link", ""):
                 source_domain = domain
                 break
-        articles_text += f"\nSOURCE {i+1}:\n"
-        articles_text += f"Outlet: {source_domain} (Trust Score: {a.get('trust_score', 50)}/100)\n"
-        articles_text += f"Headline: {a.get('title', '')}\n"
-        articles_text += f"Content: {a.get('summary', '')[:400]}\n"
-        articles_text += "---\n"
+        trust = a.get('trust_score', 50)
+        title = a.get('title', '').strip()
+        summary = a.get('summary', '').strip()[:300]
+        articles_text += f"[{i+1}] {source_domain} (trust:{trust}) | {title}"
+        if summary:
+            articles_text += f" | {summary}"
+        articles_text += "\n"
 
-    system_prompt = """You are a senior investigative journalist and misinformation analyst with 20 years experience. 
-You analyze news sources for contradictions, narrative patterns, and misinformation risks.
-You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after the JSON.
-Be specific — name actual outlets, actual claims, actual contradictions you see in the provided articles."""
+    system_prompt = (
+        "You are a misinformation analyst. "
+        "Read the news articles and return ONLY a JSON object. "
+        "No markdown. No explanation. No text outside the JSON. "
+        "Write naturally — do not repeat prompt instructions in your answers."
+    )
 
-    user_prompt = f"""Analyze these {len(articles[:12])} real news articles about "{topic}":
+    user_prompt = f"""News articles about "{topic}":
 
 {articles_text}
 
-Based ONLY on what is written above, identify contradictions between sources, narrative patterns, and misinformation risks.
+Return this JSON with real content based only on the articles above. Write each value as a natural sentence, not as a template:
 
-Respond with ONLY this JSON (fill in all fields with specific real content from the articles above):
 {{
-  "misinformation_risk_score": <integer between 20 and 95 — be realistic, not always 50>,
-  "risk_level": "<LOW|MEDIUM|HIGH|CRITICAL>",
-  "summary": "<2-3 specific sentences about what is happening with {topic} right now based on these articles, naming specific outlets and claims>",
+  "misinformation_risk_score": <number 0-100, higher if sources contradict each other>,
+  "risk_level": "<LOW or MEDIUM or HIGH or CRITICAL>",
+  "summary": "<2 sentences describing what is happening with {topic} right now and where sources disagree>",
   "detected_narratives": [
-    "<Narrative 1: Name which outlet says what specific claim>",
-    "<Narrative 2: Name which outlet says what specific claim>",
-    "<Narrative 3: Name which outlet says what specific claim>"
+    "<first narrative being pushed — name the outlet and the claim in plain English>",
+    "<second narrative being pushed — name the outlet and the claim in plain English>",
+    "<third narrative if present>"
   ],
   "contradictions": [
-    "<Contradiction 1: Outlet A says X while Outlet B says Y — be specific>",
-    "<Contradiction 2: Outlet C says X while Outlet D says Y — be specific>"
+    "<one outlet says X, another says Y — describe the specific disagreement>",
+    "<another contradiction if present>"
   ],
   "suspicious_patterns": [
-    "<Pattern 1: specific observation from these articles>",
-    "<Pattern 2: specific observation from these articles>"
+    "<something suspicious or unusual about how this story is being covered>",
+    "<another pattern>"
   ],
-  "viral_prediction": "<Which specific narrative from these articles is most likely to spread and why>",
+  "viral_prediction": "<which narrative is most likely to go viral and why>",
   "recommended_actions": [
-    "<Action 1: specific verification step for journalists based on these articles>",
-    "<Action 2: specific verification step for journalists based on these articles>",
-    "<Action 3: specific verification step for journalists based on these articles>"
+    "<what a journalist should do to verify this story>",
+    "<another verification step>",
+    "<third step>"
   ],
   "story_timeline": [
-    "<Earliest development visible in these articles>",
-    "<How narrative shifted across these articles>",
-    "<Most recent or dominant narrative>"
+    "<what happened first based on the articles>",
+    "<how the story developed>",
+    "<where things stand now>"
   ],
   "source_analysis": {{
-    "most_reliable": "<Name the highest trust outlet and what they reported>",
-    "least_reliable": "<Name the lowest trust outlet and what they reported>",
-    "consensus_level": "<HIGH if 80%+ agree, MEDIUM if some differences, LOW if strong contradictions>",
+    "most_reliable": "<name of most trusted outlet and what they said>",
+    "least_reliable": "<name of least trusted outlet and what they said>",
+    "consensus_level": "<HIGH or MEDIUM or LOW>",
     "sources_count": {len(articles[:12])},
-    "key_outlier": "<Name the source reporting most differently and what they said>"
+    "key_outlier": "<which source is reporting most differently and what they said>"
   }}
 }}"""
 
@@ -747,8 +750,16 @@ async def analyze_topic(topic: str):
         analysis = analyze_with_ai(articles, topic)
         avg_trust = sum(a.get("trust_score", 50) for a in articles) / len(articles)
 
-        if analysis.get("risk_level") in ["HIGH", "CRITICAL"]:
+        # Fix: normalize risk level and check score too
+        risk_level = str(analysis.get("risk_level", "LOW")).strip().upper()
+        risk_score = analysis.get("misinformation_risk_score", 0)
+        if not isinstance(risk_score, (int, float)):
+            risk_score = 0
+
+        if risk_level in ["HIGH", "CRITICAL"] or risk_score >= 65:
             high_risk_detections_today += 1
+            logger.info(f"High risk: {topic} — {risk_level} score:{risk_score}")
+
         if topic.lower() not in [t.lower() for t in topics_analyzed_today]:
             topics_analyzed_today.append(topic)
 
